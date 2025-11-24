@@ -1,0 +1,13 @@
+{
+    "B3": [
+        { "name": "Dolar", "root": "DOL", "source": 57, "months": "FGHJKMNQUVXZ", "chart": true },
+        { "name": "Milho", "root": "CCM", "source": 57, "months": "FHKNUX" },
+        { "name": "Boi", "root": "BGI", "source": 57, "months": "FVXZ" }
+    ],
+    "CBOT": [
+        { "name": "Soja", "root": "ZS", "source": 30, "months": "FHKNQUX" },
+        { "name": "Milho", "root": "ZC", "source": 30, "months": "HKNUZ" },
+        { "name": "Farelo", "root": "ZM", "source": 30, "months": "FHKNQUVZ" },
+        { "name": "Oleo", "root": "ZL", "source": 30, "months": "FHKNQUVZ" }
+    ]
+}

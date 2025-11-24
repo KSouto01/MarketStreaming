@@ -1,0 +1,17 @@
+# Ambientes Virtuais
+venv/
+env/
+
+# Variáveis de Ambiente (SENHAS - CRÍTICO)
+.env
+
+# Bancos de Dados (Não subimos binários grandes ou dados locais)
+*.duckdb
+*.db
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Logs e arquivos de sistema
+.DS_Store
