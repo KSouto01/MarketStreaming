@@ -7,34 +7,34 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 
-# Carrega variáveis de ambiente
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-# --- CONFIGURAÇÕES GLOBAIS ---
+# --- MAPA DE COTAÇÃO (HEXADECIMAL) ---
 FIELDS_MAP = {
-    1: 'Time', 2: 'Open', 3: 'High', 4: 'Low', 8: 'Volume',
-    10: 'Last', 12: 'Change', 13: 'PChange', 14: 'Bid', 15: 'Ask', 21: 'Previous'
+    '24': 'Time', '18': 'Open', '16': 'High', '17': 'Low', '13': 'Volume',
+    '10': 'Last', '26': 'Change', '01': 'PChange', '14': 'Bid', '15': 'Ask', '1A': 'Previous'
 }
 
-MONTH_CODES = {
-    1: 'F', 2: 'G', 3: 'H', 4: 'J', 5: 'K', 6: 'M',
-    7: 'N', 8: 'Q', 9: 'U', 10: 'V', 11: 'X', 12: 'Z'
-}
+MONTH_CODES = {1: 'F', 2: 'G', 3: 'H', 4: 'J', 5: 'K', 6: 'M', 7: 'N', 8: 'Q', 9: 'U', 10: 'V', 11: 'X', 12: 'Z'}
 
 class SmartIngestor:
     def __init__(self):
-        self.base_url = os.getenv("CMA_HOST") + "/execute"
+        host = os.getenv("CMA_HOST")
+        if not host: raise ValueError("❌ Erro: CMA_HOST vazio.")
+        self.base_url = host + "/execute"
         self.user = os.getenv("CMA_USER")
         self.password = os.getenv("CMA_PASS")
         self.session = requests.Session()
         self.session_id = None
         self.msg_id = 0
+        self.db_path = os.path.join(BASE_DIR, 'cma_data.duckdb')
         self.config = self._load_config()
         self._init_db_structure()
 
     def _load_config(self):
         try:
-            with open('config.json', 'r') as f: return json.load(f)
+            with open(os.path.join(BASE_DIR, 'config.json'), 'r') as f: return json.load(f)
         except: return {}
 
     def _get_id(self):
@@ -43,16 +43,18 @@ class SmartIngestor:
 
     def _init_db_structure(self):
         try:
-            with duckdb.connect('cma_data.duckdb') as conn:
+            with duckdb.connect(self.db_path) as conn:
+                conn.execute("DROP TABLE IF EXISTS market_snapshot")
+                conn.execute("DROP TABLE IF EXISTS market_history")
                 conn.execute("""
-                    CREATE TABLE IF NOT EXISTS market_snapshot (
+                    CREATE TABLE market_snapshot (
                         timestamp TIMESTAMP, group_name VARCHAR, product_name VARCHAR, symbol VARCHAR, description VARCHAR,
                         Last DOUBLE, High DOUBLE, Low DOUBLE, Open DOUBLE, Change DOUBLE, PChange DOUBLE, Previous DOUBLE, 
                         Volume DOUBLE, Time VARCHAR, Bid DOUBLE, Ask DOUBLE, Maturity DATE
                     )
                 """)
                 conn.execute("""
-                    CREATE TABLE IF NOT EXISTS market_history (
+                    CREATE TABLE market_history (
                         symbol VARCHAR, date_ref DATE, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume DOUBLE
                     )
                 """)
@@ -62,7 +64,7 @@ class SmartIngestor:
         if value is None or value == '': return 0.0
         if isinstance(value, (int, float)): return float(value)
         try:
-            s_val = str(value)
+            s_val = str(value).strip().replace('+', '')
             if ',' in s_val: s_val = s_val.replace('.', '').replace(',', '.')
             return float(s_val)
         except: return 0.0
@@ -74,16 +76,13 @@ class SmartIngestor:
             resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(data)}, timeout=15)
             if resp.status_code == 200: return resp.json()
             return None
-        except Exception as e:
-            print(f"❌ Erro Conexão: {e}")
-            return None
+        except: return None
 
     def login(self):
         print(f"🔐 Autenticando...")
         payload = {
             "user": self.user, "pass": self.password, "type": "s", "service": "m", 
-            "transport": "Polling", "version": 1, "sync": True,
-            "oms": {"ip": "0.0.0.0", "channel": "API", "language": "PT"}
+            "transport": "Polling", "version": 1, "sync": True, "oms": {"ip": "0.0.0.0", "channel": "API", "language": "PT"}
         }
         resp = self._post("LoginRequest", payload)
         if resp and resp.get("success"):
@@ -97,14 +96,22 @@ class SmartIngestor:
         candidates = []
         today = datetime.now()
         chart_symbol = None 
+        if not self.config: return [], None
+
         for group_name, products in self.config.items():
             for prod in products:
                 for i in range(14): 
                     future_date = today + relativedelta(months=i)
                     month_char = MONTH_CODES[future_date.month]
+                    
                     if month_char in prod.get('months', "FGHJKMNQUVXZ"):
-                        symbol = f"{prod['root']}{month_char}{future_date.strftime('%y')}"
-                        item = {"symbol": symbol, "sourceId": str(prod['source']), "group": group_name, "product": prod['name'], "maturity_est": future_date.replace(day=1).date()}
+                        source_id = str(prod['source'])
+                        year_full = future_date.strftime('%y')
+                        # Lógica Híbrida: CBOT (30) usa 1 dígito, B3 (57) usa 2
+                        year_suffix = year_full[-1] if source_id == '30' else year_full
+                        symbol = f"{prod['root']}{month_char}{year_suffix}"
+                        
+                        item = {"symbol": symbol, "sourceId": source_id, "group": group_name, "product": prod['name'], "maturity_est": future_date.replace(day=1).date()}
                         candidates.append(item)
                         if prod.get('chart') == True and chart_symbol is None:
                             if future_date.date() >= today.date(): chart_symbol = item
@@ -113,26 +120,28 @@ class SmartIngestor:
     def capture_history(self, target):
         if not target: return
         dt_to = datetime.now()
-        # --- AJUSTE V3.1: Histórico reduzido para 90 dias (3 meses) ---
         dt_from = dt_to - timedelta(days=90)
-        
         payload = {
             "type": "c", "sync": True, "symbolId": {"sourceId": target['sourceId'], "symbol": target['symbol']},
             "dateFrom": dt_from.strftime("%Y-%m-%d"), "dateTo": dt_to.strftime("%Y-%m-%d"), "period": 1
         }
         resp = self._post("DailyGraphRequest", payload)
-        if resp and 'bars' in resp:
+        
+        if resp and 'graphicalBars' in resp:
             rows = []
-            for b in resp['bars']:
+            for b in resp['graphicalBars']:
                 try:
-                    d_str = str(b.get('02', ''))
-                    if len(d_str) == 8:
-                        d_fmt = f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:]}"
-                        rows.append((target['symbol'], d_fmt, self._safe_float(b.get('06')), self._safe_float(b.get('04')), self._safe_float(b.get('05')), self._safe_float(b.get('03')), self._safe_float(b.get('08'))))
+                    d_str = str(b.get('date', ''))
+                    rows.append((
+                        target['symbol'], d_str,
+                        self._safe_float(b.get('open')), self._safe_float(b.get('max')),
+                        self._safe_float(b.get('min')), self._safe_float(b.get('close')),
+                        self._safe_float(b.get('volume'))
+                    ))
                 except: continue
             if rows:
                 try:
-                    with duckdb.connect('cma_data.duckdb') as conn:
+                    with duckdb.connect(self.db_path) as conn:
                         conn.execute("DELETE FROM market_history")
                         conn.executemany("INSERT INTO market_history VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
                 except: pass
@@ -146,14 +155,23 @@ class SmartIngestor:
         valid_rows = []
         
         for i in range(0, len(api_symbols), 50):
-            resp = self._post("QuotesRequest", {"type": "q", "sync": True, "symbols": api_symbols[i:i+50], "fields": requested_fields})
+            chunk = api_symbols[i:i+50]
+            resp = self._post("QuotesRequest", {"type": "q", "sync": True, "symbols": chunk, "fields": requested_fields})
             if resp and 'arrQuotes' in resp:
                 now_ts = datetime.now()
                 for q in resp['arrQuotes']:
                     sym = q.get('symbolId', {}).get('symbol')
                     meta = meta_map.get(sym)
                     if not meta: continue
-                    vals = {FIELDS_MAP[item['id']]: item['value'] for item in q.get('arrValues', []) if item['id'] in FIELDS_MAP}
+                    vals = {}
+                    
+                    # --- CORREÇÃO DE CASE SENSITIVE ---
+                    # Converte chave da API para UPPER (ex: "1a" -> "1A") para bater com FIELDS_MAP
+                    for item in q.get('arrValues', []):
+                        for k, v in item.items():
+                            k_upper = str(k).upper()
+                            if k_upper in FIELDS_MAP: 
+                                vals[FIELDS_MAP[k_upper]] = v
                     
                     last = self._safe_float(vals.get('Last'))
                     previous = self._safe_float(vals.get('Previous'))
@@ -170,11 +188,12 @@ class SmartIngestor:
 
         if valid_rows:
             try:
-                with duckdb.connect('cma_data.duckdb') as conn:
+                with duckdb.connect(self.db_path) as conn:
                     conn.execute("DELETE FROM market_snapshot")
                     conn.executemany("INSERT INTO market_snapshot VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", valid_rows)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 Atualizado: {len(valid_rows)} ativos.")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 Snapshot: {len(valid_rows)} ativos.")
             except Exception as e: print(f"❌ Erro DB: {e}")
+        
         if chart_target: self.capture_history(chart_target)
 
     def run_loop(self):
@@ -190,6 +209,6 @@ class SmartIngestor:
             except Exception: self.session_id = None
 
 if __name__ == "__main__":
-    print("🚀 Iniciando Ingestor v3.1 (3 Meses Histórico)")
+    print("🚀 Ingestor v4.2 (Case Fix)")
     bot = SmartIngestor()
     bot.run_loop()
