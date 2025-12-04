@@ -4,202 +4,205 @@ import pandas as pd
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-from dash import dcc, html, Input, Output, no_update
+from dash import dcc, html, Input, Output, State, no_update, ctx
 from datetime import datetime
+import json
 import os 
 
-# --- CAMINHO ABSOLUTO ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_SOURCE = os.path.join(BASE_DIR, 'cma_data.duckdb')
+DB_REALTIME = os.path.join(BASE_DIR, 'cma_realtime.duckdb')
+DB_HISTORY = os.path.join(BASE_DIR, 'cma_history.duckdb')
+CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+CHART_FILE = os.path.join(BASE_DIR, 'active_chart.json')
 
-# --- FORMATAÇÃO VETORIZADA ---
+def load_config():
+    try:
+        with open(CONFIG_FILE, 'r') as f: return json.load(f)
+    except: return {}
+
+def save_active_chart(symbol, source_id):
+    try:
+        current = {}
+        if os.path.exists(CHART_FILE):
+            with open(CHART_FILE, 'r') as f: current = json.load(f)
+        if current.get('symbol') != symbol:
+            with open(CHART_FILE, 'w') as f: json.dump({"symbol": symbol, "sourceId": str(source_id)}, f)
+    except: pass
+
 def format_currency_vec(series, decimals=2):
-    return series.apply(lambda x: 
-        '-' if pd.isna(x) or x == 0 else 
-        f"{x:,.{decimals}f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-    )
+    s_num = pd.to_numeric(series, errors='coerce').fillna(0)
+    return s_num.apply(lambda x: '-' if x == 0 else f"{x:,.{decimals}f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
 
 def format_pct_vec(series):
-    return series.apply(lambda x: 
-        '-' if pd.isna(x) else 
-        f"{'+' if x > 0 else ''}{x:,.2f}%".replace('.', ',')
-    )
+    s_num = pd.to_numeric(series, errors='coerce').fillna(0)
+    return s_num.apply(lambda x: '-' if x == 0 else f"{'+' if x > 0 else ''}{x:,.2f}%".replace('.', ','))
 
-# --- ESTILOS ---
-style_bold = {'fontSize': '16px', 'fontWeight': 'bold', 'color': '#fff', 'display': 'flex', 'alignItems': 'center'}
-style_last = {'fontSize': '16px', 'fontWeight': 'bold', 'color': '#4db6ac', 'display': 'flex', 'alignItems': 'center'}
-style_base = {'fontSize': '16px', 'fontFamily': 'Roboto Mono', 'display': 'flex', 'alignItems': 'center'}
-
+style_bold = {'fontSize': '15px', 'fontWeight': 'bold', 'color': '#fff', 'display': 'flex', 'alignItems': 'center'}
+style_last = {'fontSize': '15px', 'fontWeight': 'bold', 'color': '#4db6ac', 'display': 'flex', 'alignItems': 'center'}
+style_base = {'fontSize': '15px', 'fontFamily': 'Roboto Mono', 'display': 'flex', 'alignItems': 'center'}
 style_change = {
     "styleConditions": [
-        {"condition": "params.data.Change_raw > 0", "style": {"color": "#00e676", "fontWeight": "bold", "fontSize": "16px"}},
-        {"condition": "params.data.Change_raw < 0", "style": {"color": "#ff5252", "fontWeight": "bold", "fontSize": "16px"}},
-        {"condition": "params.data.Change_raw == 0", "style": {"color": "#aaaaaa", "fontSize": "16px"}}
+        {"condition": "params.data.Change_raw > 0", "style": {"color": "#00e676", "fontWeight": "bold", "fontSize": "15px"}},
+        {"condition": "params.data.Change_raw < 0", "style": {"color": "#ff5252", "fontWeight": "bold", "fontSize": "15px"}},
+        {"condition": "params.data.Change_raw == 0", "style": {"color": "#aaaaaa", "fontSize": "15px"}}
     ]
 }
 
-# --- COLUNAS ---
 cols_def = [
-    {"field": "symbol", "headerName": "Ativo", "minWidth": 110, "pinned": "left", "cellStyle": style_bold},
-    {"field": "Last_fmt", "headerName": "Último", "cellStyle": style_last},
-    {"field": "Change_fmt", "headerName": "Dif", "cellStyle": style_change},
+    {"field": "symbol", "headerName": "ATIVO", "minWidth": 90, "pinned": "left", "cellStyle": style_bold},
+    {"field": "Last_fmt", "headerName": "ÚLTIMO", "cellStyle": style_last},
+    {"field": "Change_fmt", "headerName": "DIF", "cellStyle": style_change},
     {"field": "PChange_fmt", "headerName": "%", "cellStyle": style_change},
-    {"field": "High_fmt", "headerName": "Máx", "cellStyle": style_base},
-    {"field": "Low_fmt", "headerName": "Mín", "cellStyle": style_base},
-    {"field": "Time", "headerName": "Hora", "width": 90, "cellStyle": {"color": "#888", "fontSize": "13px", "display": "flex", "alignItems": "center"}},
+    {"field": "High_fmt", "headerName": "MÁX", "cellStyle": style_base},
+    {"field": "Low_fmt", "headerName": "MÍN", "cellStyle": style_base},
     {"field": "Change_raw", "hide": True}
 ]
 
-def get_grid_opts():
-    return {
-        "defaultColDef": {"resizable": True, "sortable": True, "flex": 1, "minWidth": 80}, 
-        "columnDefs": cols_def, 
-        "rowData": [], 
-        "headerHeight": 35, "rowHeight": 35, 
-        "suppressMovableColumns": True
-    }
-
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG, "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"])
 app.title = "Fazendão Streaming"
 
 def create_card(title, grid_id):
     return dbc.Card([
-        dbc.CardHeader(title, className="fw-bold text-white border-bottom border-secondary py-1 ps-3", style={"backgroundColor": "black", "fontSize": "0.95rem"}),
-        dbc.CardBody(dag.AgGrid(
-            id=grid_id, className="ag-theme-balham-dark", dashGridOptions=get_grid_opts(),
-            columnSize="sizeToFit", style={"height": "100%", "width": "100%"}, rowData=[]
-        ), className="p-0 d-flex flex-column flex-grow-1")
-    ], className="h-100 border-secondary shadow-sm")
+        dbc.CardHeader(title, className="fw-bold text-white border-bottom border-secondary py-1 ps-2", style={"backgroundColor": "black", "fontSize": "0.85rem", "letterSpacing": "1px"}),
+        dbc.CardBody(dag.AgGrid(id=grid_id, className="ag-theme-balham-dark", dashGridOptions={"defaultColDef": {"resizable": True, "sortable": True, "flex": 1, "minWidth": 60}, "columnDefs": cols_def, "headerHeight": 32, "rowHeight": 32, "suppressMovableColumns": True}, columnSize="sizeToFit", style={"height": "100%", "width": "100%"}, rowData=[]), className="p-0 d-flex flex-column flex-grow-1")
+    ], className="h-100 shadow-sm")
+
+filter_modal = dbc.Modal([
+    dbc.ModalHeader(dbc.ModalTitle("Filtros do Gráfico"), close_button=True),
+    dbc.ModalBody([
+        dbc.Row([
+            dbc.Col([dbc.Label("Bolsa"), dcc.Dropdown(id="filter-exchange", options=[{'label': 'B3', 'value': 'B3'}, {'label': 'CBOT', 'value': 'CBOT'}], placeholder="Selecione...", className="text-dark")]),
+            dbc.Col([dbc.Label("Produto"), dcc.Dropdown(id="filter-product", options=[], placeholder="Selecione...", className="text-dark")])
+        ], className="mb-3"),
+        dbc.Row([
+            dbc.Col([dbc.Label("Ativo (Símbolo)"), dcc.Dropdown(id="filter-symbol", options=[], placeholder="Selecione o contrato...", className="text-dark", style={'width': '100%'})], width=12),
+        ])
+    ]),
+    dbc.ModalFooter([html.Div(id="filter-error-msg", className="text-danger me-auto small"), dbc.Button("Aplicar Filtro", id="apply-filter", color="primary", n_clicks=0)])
+], id="modal-filter", is_open=False, centered=True)
 
 app.layout = dbc.Container([
-    # HEADER PERSONALIZADO
-    dbc.Row([
-        dbc.Col(dbc.Card([
-            dbc.CardBody([
-                # Lado Esquerdo: Título + Assinatura Equipe
-                html.Div([
-                    html.H4("MONITORAMENTO DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.4rem'}),
-                    # Nova Frase Solicitada
-                    html.Span("Equipe TI | Klaus Maya Souto", className="ms-3", style={'color': '#ffffff', 'fontSize': '0.90rem', 'opacity': '0.7', 'letterSpacing': '0.5px'})
-                ], style={'display': 'flex', 'alignItems': 'baseline'}), # baseline alinha o texto pequeno com a base do grande
-
-                # Lado Direito: Status e Hora (Agora Brancos)
-                html.Div([
-                    html.Span("CONECTADO", className="fw-bold me-3", style={'color': '#ffffff', 'fontSize': '0.9rem'}),
-                    html.Span(id="last-update-time", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1.1rem', 'color': '#ffffff'})
-                ], className="d-flex align-items-center")
-            ], className="d-flex align-items-center justify-content-between p-2")
-        ], style={'backgroundColor': '#000', 'height': '70px', 'borderBottom': '1px solid #333'}), width=12)
-    ], className="mb-2"),
-    
-    # BODY
+    dbc.Row([dbc.Col(dbc.Card([dbc.CardBody([html.Div([html.H4("PAINEL DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.2rem', 'letterSpacing': '1px'}), html.Span("Equipe TI | Dev Klaus Maya Souto", className="ms-3", style={'color': '#ccc', 'fontSize': '0.7rem'})], style={'display': 'flex', 'alignItems': 'baseline'}), html.Div([html.Span("CONECTADO", className="fw-bold me-3", style={'color': '#fff', 'fontSize': '0.8rem'}), html.Span(id="last-update-time", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})], className="d-flex align-items-center")], className="d-flex align-items-center justify-content-between p-1")], style={'backgroundColor': '#000', 'height': '50px', 'borderBottom': '1px solid #333'}), width=12)], className="mb-1"),
     html.Div([
         dbc.Row([
-            dbc.Col([
-                html.Div(create_card("CBOT - Soja (USD/bu)", "grid-soja"), className="pb-1", style={"flex": "1"}),
-                html.Div(create_card("CBOT - Milho (USD/bu)", "grid-milho"), className="pb-1", style={"flex": "1"}),
-                html.Div(create_card("CBOT - Farelo (USD/st)", "grid-farelo"), className="pb-1", style={"flex": "1"}),
-                html.Div(create_card("CBOT - Óleo (USD/lb)", "grid-oleo"), style={"flex": "1"}),
-            ], md=6, className="d-flex flex-column h-100 pe-1"),
-            dbc.Col([
-                html.Div(create_card("B3 - Dólar Futuro (BRL)", "grid-dolar"), className="pb-1", style={"flex": "1"}),
-                html.Div(create_card("B3 - Milho Futuro (BRL)", "grid-ccm"), className="pb-1", style={"flex": "1"}),
-                html.Div(create_card("B3 - Boi Gordo (BRL)", "grid-boi"), className="pb-1", style={"flex": "1"}),
-                html.Div(dbc.Card([
-                    dbc.CardHeader("CURVA DO DÓLAR (90 Dias)", className="fw-bold text-white border-bottom border-secondary py-1 ps-3", style={"backgroundColor": "black", "fontSize": "0.95rem"}),
-                    dbc.CardBody(dcc.Graph(id="chart-dolar", style={"height": "100%"}), className="p-1 h-100")
-                ], className="h-100 border-secondary shadow-sm"), style={"flex": "2"})
-            ], md=6, className="d-flex flex-column h-100 ps-1"),
+            dbc.Col([html.Div(create_card("CBOT - Farelo (USD/st)", "grid-farelo"), className="pb-1", style={"flex": "1"}), html.Div(create_card("CBOT - Soja (USD/bu)", "grid-soja"), className="pb-1", style={"flex": "1"}), html.Div(create_card("CBOT - Óleo (USD/lb)", "grid-oleo"), style={"flex": "1"})], width=4, className="d-flex flex-column h-100 pe-1"),
+            dbc.Col([html.Div(create_card("B3 - Milho Futuro (BRL)", "grid-ccm"), className="pb-1", style={"flex": "1"}), html.Div(create_card("CBOT - Milho (USD/bu)", "grid-milho"), className="pb-1", style={"flex": "1"}), html.Div(create_card("B3 - Boi Gordo (BRL)", "grid-boi"), style={"flex": "1"})], width=4, className="d-flex flex-column h-100 px-1"),
+            dbc.Col([html.Div(create_card("B3 - Dólar Futuro (BRL)", "grid-dolar"), className="pb-1", style={"flex": "1"}), html.Div(dbc.Card([dbc.CardHeader([html.Span("ANÁLISE GRÁFICA (90D)", className="fw-bold text-white", style={"fontSize": "0.85rem"}), dbc.Button(html.I(className="fa-solid fa-filter"), id="open-filter", color="light", size="sm", className="bg-transparent border-0 text-white")], className="d-flex justify-content-between align-items-center bg-black border-bottom border-secondary py-1 ps-2 pe-2"), dbc.CardBody(dcc.Graph(id="chart-main", style={"height": "100%"}), className="p-1 h-100")], className="h-100 border-secondary shadow-sm"), style={"flex": "2"})], width=4, className="d-flex flex-column h-100 ps-1"),
         ], style={"height": "100%", "width": "100%", "margin": "0"}),
-    ], style={"height": "calc(95vh - 80px)", "display": "flex", "width": "100%"}),
-    
-    dcc.Interval(id='interval-updater', interval=2000, n_intervals=0)
-], fluid=True, style={"height": "100vh", "backgroundColor": "#111", "overflow": "hidden"})
+    ], style={"height": "calc(98vh - 60px)", "display": "flex", "width": "100%"}),
+    filter_modal, dcc.Interval(id='interval-updater', interval=1000, n_intervals=0),
+    dcc.Store(id='current-filter', data={'symbol': 'DOLF26', 'product': 'Dolar'}) 
+], fluid=True, style={"height": "100vh", "backgroundColor": "#111", "overflow": "hidden", "padding": "5px"})
 
 @app.callback(
     [Output("grid-soja", "rowData"), Output("grid-milho", "rowData"), Output("grid-farelo", "rowData"), Output("grid-oleo", "rowData"),
      Output("grid-dolar", "rowData"), Output("grid-ccm", "rowData"), Output("grid-boi", "rowData"),
-     Output("chart-dolar", "figure"), Output("last-update-time", "children")],
-    [Input("interval-updater", "n_intervals")]
+     Output("chart-main", "figure"), Output("last-update-time", "children"),
+     Output("filter-product", "options"), Output("filter-symbol", "options"),
+     Output("modal-filter", "is_open"), Output("filter-error-msg", "children"), Output("current-filter", "data")],
+    [Input("interval-updater", "n_intervals"), Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")],
+    [State("modal-filter", "is_open"), State("filter-exchange", "value"), State("filter-product", "value"), State("filter-symbol", "value"), State("current-filter", "data")]
 )
-def update(n):
+def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, current_filter_data):
+    trigger = ctx.triggered_id
+    # CORREÇÃO: Todos os returns agora têm 15 elementos
+    if trigger == 'open-filter': return [no_update]*12 + [True, "", no_update]
+    
+    if trigger == 'apply-filter':
+        if not all([sel_exchange, sel_prod, sel_symbol]): return [no_update]*12 + [True, "Preencha todos os campos!", no_update]
+        current_filter_data = {'symbol': sel_symbol, 'product': sel_prod}
+        config = load_config()
+        src_id = "57"
+        for grp in config.values():
+            for p in grp:
+                if p['name'] == sel_prod: src_id = str(p['source'])
+        save_active_chart(sel_symbol, src_id)
+        is_open = False
+
     try:
-        conn = duckdb.connect(DB_SOURCE, read_only=True)
+        conn = duckdb.connect(DB_REALTIME, read_only=True)
         try: df = conn.execute("SELECT * FROM market_snapshot ORDER BY Maturity ASC, symbol ASC").fetchdf()
         except: df = pd.DataFrame()
-        try: df_hist = conn.execute("SELECT * FROM market_history ORDER BY date_ref ASC").fetchdf()
-        except: df_hist = pd.DataFrame()
         conn.close()
         
-        col_map = {
-            'last': 'Last', 'high': 'High', 'low': 'Low', 'open': 'Open',
-            'change': 'Change', 'pchange': 'PChange', 'previous': 'Previous',
-            'volume': 'Volume', 'time': 'Time', 'bid': 'Bid', 'ask': 'Ask',
-            'maturity': 'Maturity', 'symbol': 'symbol', 'group_name': 'group_name', 'product_name': 'product_name'
-        }
+        conn_h = duckdb.connect(DB_HISTORY, read_only=True)
+        try: df_hist = conn_h.execute("SELECT * FROM market_history ORDER BY date_ref ASC").fetchdf()
+        except: df_hist = pd.DataFrame()
+        conn_h.close()
         
         if not df.empty:
+            col_map = {'last':'Last','high':'High','low':'Low','open':'Open','change':'Change','pchange':'PChange','previous':'Previous','volume':'Volume','time':'Time','bid':'Bid','ask':'Ask','maturity':'Maturity','symbol':'symbol','group_name':'group_name','product_name':'product_name'}
             df.columns = [x.lower() for x in df.columns]
             df = df.rename(columns=col_map)
             df = df.fillna(0)
-            
+            df['product_name'] = df['product_name'].astype(str).str.strip()
+            df['group_name'] = df['group_name'].astype(str).str.strip()
             cols_num = ['Last', 'High', 'Low', 'Open', 'Change', 'PChange']
-            for col in cols_num:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
+            for col in cols_num: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             mask_dolar = df['product_name'].str.lower() == 'dolar'
-            cols_div = ['Last', 'High', 'Low', 'Change']
+            if mask_dolar.any(): df.loc[mask_dolar, ['Last', 'High', 'Low', 'Change']] /= 1000.0
+            for c in ['Last', 'High', 'Low', 'Change']: df[f"{c}_fmt"] = format_currency_vec(df[c], 2)
             if mask_dolar.any():
-                df.loc[mask_dolar, cols_div] = df.loc[mask_dolar, cols_div] / 1000.0
-
-            if mask_dolar.any():
-                for col in cols_div:
-                    df.loc[mask_dolar, f"{col}_fmt"] = format_currency_vec(df.loc[mask_dolar, col], 4)
-            
-            if (~mask_dolar).any():
-                for col in cols_div:
-                    df.loc[~mask_dolar, f"{col}_fmt"] = format_currency_vec(df.loc[~mask_dolar, col], 2)
-            
+                for c in ['Last', 'High', 'Low', 'Change']: df.loc[mask_dolar, f"{c}_fmt"] = format_currency_vec(df.loc[mask_dolar, c], 4)
             df['PChange_fmt'] = format_pct_vec(df['PChange'])
             df['Change_raw'] = df['Change']
 
-        def d(g, p): return df[(df['group_name']==g) & (df['product_name']==p)].to_dict('records') if not df.empty else []
+        def d(g, p): 
+            filtered = df[(df['group_name'].str.lower() == g.lower()) & (df['product_name'].str.lower() == p.lower())]
+            return filtered.to_dict('records') if not filtered.empty else []
 
         fig = go.Figure()
-        if not df_hist.empty:
-            df_hist.columns = [x.lower() for x in df_hist.columns]
-            sym = df_hist.iloc[0]['symbol'] if 'symbol' in df_hist.columns else 'Dolar'
-            
-            if 'dol' in sym.lower():
-                for col in ['open', 'max', 'min', 'close']:
-                    if col in df_hist.columns:
-                        df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce').fillna(0) / 1000.0
-
-            fig.add_trace(go.Candlestick(
-                x=df_hist['date_ref'], 
-                open=df_hist['open'], high=df_hist.get('max', df_hist['open']),
-                low=df_hist.get('min', df_hist['open']), close=df_hist['close'],
-                increasing_line_color='#00e676', increasing_fillcolor='#00e676', 
-                decreasing_line_color='#ff1744', decreasing_fillcolor='#ff1744',
-                xhoverformat="%d/%m/%Y", yhoverformat=',.4f'
-            ))
-            fig.update_layout(
-                template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=20, r=55, t=30, b=30), xaxis_rangeslider_visible=False,
-                yaxis=dict(side='right', tickformat=",", showgrid=True, gridcolor='#333'),
-                separators=',.', 
-                title=dict(text=f"CONTRATO: {sym}", font=dict(size=14, color='#ccc'))
-            )
-        else:
-            fig.update_layout(template="plotly_dark", title="Aguardando dados...", paper_bgcolor='rgba(0,0,0,0)')
+        prods, symbols = [], []
         
+        if not df.empty:
+            if sel_exchange: prods = sorted(df[df['group_name'].str.upper() == sel_exchange]['product_name'].unique())
+            else: prods = sorted(df['product_name'].unique())
+            if sel_prod: symbols = sorted(df[df['product_name'] == sel_prod]['symbol'].unique())
+
+            target_symbol = current_filter_data.get('symbol')
+            target_prod_name = current_filter_data.get('product')
+            
+            if not target_symbol:
+                dol_avail = df[df['product_name'].str.lower() == 'dolar']
+                if not dol_avail.empty:
+                    target_symbol = dol_avail.iloc[0]['symbol']
+                    save_active_chart(target_symbol, "57")
+
+            if not df_hist.empty and target_symbol:
+                hist_data = df_hist[df_hist['symbol'] == target_symbol].copy()
+                if not hist_data.empty:
+                    hist_data.columns = [x.lower() for x in hist_data.columns]
+                    if 'dol' in target_symbol.lower():
+                        for c in ['open', 'high', 'low', 'close']: hist_data[c] = pd.to_numeric(hist_data[c], errors='coerce').fillna(0) / 1000.0
+                    
+                    last_c = hist_data.iloc[-1]['close']
+                    prev_c = hist_data.iloc[-2]['close'] if len(hist_data) > 1 else last_c
+                    line_color = '#00e676' if last_c >= prev_c else '#ff5252'
+
+                    fig.add_trace(go.Candlestick(
+                        x=hist_data['date_ref'], open=hist_data['open'], 
+                        high=hist_data.get('high', hist_data.get('max', hist_data['open'])), 
+                        low=hist_data.get('low', hist_data.get('min', hist_data['open'])),   
+                        close=hist_data['close'], increasing_line_color='#00e676', decreasing_line_color='#ff1744',
+                        xhoverformat="%d/%m/%Y", yhoverformat=',.4f'
+                    ))
+                    fig.add_hline(y=last_c, line_dash="dot", line_color=line_color, annotation_text=f"{last_c:,.4f}".replace('.', ','), annotation_position="top right", annotation_bgcolor="rgba(0,0,0,0.8)")
+                    fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=60, t=30, b=20), xaxis_rangeslider_visible=False, yaxis=dict(side='right', tickformat=",", showgrid=True, gridcolor='#333'), separators=',.', title=dict(text=f"{target_prod_name} - {target_symbol}", font=dict(size=14, color='#ccc')))
+                else: fig.update_layout(template="plotly_dark", title=f"Histórico {target_symbol} vazio", paper_bgcolor='rgba(0,0,0,0)')
+            else: fig.update_layout(template="plotly_dark", title="Aguardando dados...", paper_bgcolor='rgba(0,0,0,0)')
+        else: fig.update_layout(template="plotly_dark", title="Iniciando...", paper_bgcolor='rgba(0,0,0,0)')
+
         return (d('CBOT', 'Soja'), d('CBOT', 'Milho'), d('CBOT', 'Farelo'), d('CBOT', 'Oleo'),
                 d('B3', 'Dolar'), d('B3', 'Milho'), d('B3', 'Boi'),
-                fig, datetime.now().strftime('%H:%M:%S'))
-    except Exception as e: 
-        print(f"Erro App: {e}")
-        return [no_update]*8 + ["Reconectando..."]
+                fig, datetime.now().strftime('%H:%M:%S'), prods, symbols, is_open, "", current_filter_data)
+    except Exception as e:
+        print(f"Erro: {e}")
+        return [no_update]*14 + [no_update]
+
+@app.callback(Output("modal-filter", "is_open"), [Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")], [State("modal-filter", "is_open")])
+def toggle_modal(n1, n2, is_open):
+    if n1 or n2: return not is_open
+    return is_open
 
 if __name__ == "__main__":
     app.run(debug=False, port=8050, host='0.0.0.0')

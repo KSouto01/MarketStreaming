@@ -1,0 +1,148 @@
+O coração da comunicação com a Bolsa de Valores (via CMA) está no arquivo ingestor.py. Ele funciona como um navegador web automatizado que conversa com o servidor da CMA usando "cartas" (pacotes JSON).
+
+Aqui está a anatomia detalhada de como construímos essa engrenagem:
+
+    #1. O Mensageiro: A Função _post
+Tudo começa aqui. Para não repetirmos código, criamos uma função central chamada _post. Ela é o "carteiro" do sistema.
+
+O que ela faz:
+
+Pega o Nome da Requisição (ex: "LoginRequest") e os dados que queremos enviar.
+
+Adiciona automaticamente o ID da Mensagem (para controle) e o SessionID (sua crachá de acesso).
+
+Empacota tudo em um JSON dentro de um campo chamado JSONRequest.
+
+Envia para a URL .../execute e espera a resposta.
+
+            /// def _post(self, name, payload):
+                # Garante que sempre enviamos o crachá (sessionId), mesmo que vazio no início
+                current_session = self.session_id if self.session_id else ""
+                
+                data = {
+                    "id": self._get_id(),
+                    "name": name,            # Ex: "LoginRequest" ou "QuotesRequest"
+                    "sessionId": current_session,
+                    **payload                # Os dados específicos (usuário, símbolos, etc)
+                }
+                
+                # O envio real
+                resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(data)}) ///
+
+
+
+    #2. O Login: Obtendo o "Crachá" (login)
+Antes de pedir qualquer preço, precisamos nos identificar.
+
+A Lógica: Enviamos um pacote LoginRequest com seu usuário e senha (que puxamos do arquivo .env para segurança).
+
+O Segredo: Se o login for sucesso, a API nos devolve um código longo e aleatório chamado sessionId (ex: a6fb2a05...).
+
+A Regra: Nós guardamos esse código na memória (self.session_id). Todas as próximas chamadas (pedir cotação, gráfico) PRECISAM enviar esse código junto, senão a API bloqueia.
+
+            /// def login(self):
+                payload = {
+                    "user": self.user, 
+                    "pass": self.password, 
+                    "type": "s",           # Tipo 'Station' (Snapshot)
+                    "service": "m",        # Serviço de Market Data
+                    # ... outros parâmetros técnicos
+                }
+                resp = self._post("LoginRequest", payload)
+                
+                if resp.get("success"):
+                    self.session_id = resp.get("sessionId") # Guardamos o crachá!
+                    return True ///
+
+
+
+    #3. Gerando os Códigos dos Ativos (generate_symbol_list)
+Aqui está a inteligência do negócio. A API não adivinha que queremos "Soja Março 2026". Nós precisamos montar o código exato (Ticker).
+
+O Desafio: Os códigos mudam todo mês (F, G, H...) e todo ano.
+
+A Solução: Criamos um loop que olha para a data de hoje e projeta 14 meses para frente.
+
+A Tradução: Usamos um dicionário (MONTH_CODES) para trocar o mês 3 pela letra H, o mês 5 pela letra K, etc.
+
+A Correção Híbrida (V4.1): Descobrimos que a B3 usa 2 dígitos de ano (26) e a CBOT usa 1 dígito (6). O código verifica a fonte (sourceId) e monta o sufixo correto.
+
+Exemplo Prático no Código:
+
+Se é Março/2026 e fonte CBOT (30) -> ZS (Raiz) + H (Mês) + 6 (Ano) = ZSH6
+
+Se é Março/2026 e fonte B3 (57) -> DOL (Raiz) + H (Mês) + 26 (Ano) = DOLH26
+
+
+    #4. Chamando as Cotações (capture_snapshot)
+Agora que temos o Crachá (Login) e a Lista de Nomes (Symbols), pedimos os dados.
+
+Requisição: Enviamos um QuotesRequest com a lista de símbolos.
+
+O Pulo do Gato (Mapeamento): A API não retorna { "Preco": 50.0 }. Ela retorna códigos hexadecimais estranhos como { "10": "50.0", "1A": "49.5" }.
+
+A Tradução: Nós criamos o FIELDS_MAP no início do arquivo para traduzir isso:
+
+'10' virou Last (Último Preço).
+
+'24' virou Time (Hora).
+
+'1A' virou Previous (Fechamento Anterior).
+
+            /// # O Tradutor Universal
+            FIELDS_MAP = { '24': 'Time', '10': 'Last', '1A': 'Previous', ... }
+
+            # ... dentro do loop de captura ...
+            for item in raw_values:
+                for key_id, val in item.items():
+                    # Se a chave '10' estiver no mapa, salvamos como 'Last'
+                    if key_id in FIELDS_MAP:
+                        vals[FIELDS_MAP[key_id]] = val ///
+
+
+    #Resumo da Ópera
+Ingestor acorda.
+
+Lê Configurações: Pega usuário/senha e quais produtos você quer (Soja, Dólar).
+
+Faz Login: Ganha o sessionId.
+
+Calcula Futuro: Gera os códigos ZSH6, DOLF26 baseado na data de hoje.
+
+Pede Dados: Envia a lista para a CMA.
+
+Traduz: Converte os códigos '10', '1A' para valores reais e formata números (tira o +, troca ponto por vírgula se precisar).
+
+Salva: Grava tudo no banco duckdb para o App ler.
+
+
+    #Utilizamos exatamente 3 métodos (Requests) da API da CMA.
+
+    #Vale lembrar que a API da CMA funciona via Tunneling: existe apenas uma URL principal (/execute), e nós dizemos qual "serviço" queremos acessando o parâmetro name dentro do JSON.
+
+Aqui estão as 3 chamadas utilizadas:
+
+1. LoginRequest (Autenticação)
+Onde foi usada: No método def login(self) do ingestor.py.
+
+Função: Envia usuário e senha para obter o sessionId (o crachá de acesso).
+
+Detalhe Técnico: Configuramos com type: "s" (Station/Snapshot) e transport: "Polling", conforme consta na coleção do Postman enviada, para garantir uma conexão estável via HTTP.
+
+2. QuotesRequest (Cotações em Tempo Real)
+Onde foi usada: No método def capture_snapshot(self).
+
+Função: Busca os dados instantâneos (Snapshot) de uma lista de ativos (Symbols). É aqui que o painel ganha vida.
+
+Mapeamento: Esta foi a parte mais crítica. Utilizamos o arquivo CSV (Streamer Feed - Parameters...) para decifrar que o ID 10 é o "Último Preço", 24 é "Hora", etc.
+
+            /// "name": "QuotesRequest",
+            "type": "q", # q = quotes
+            "fields": [...] # Lista dos IDs decifrados ///
+
+    #3. DailyGraphRequest (Histórico para Gráfico)
+Onde foi usada: No método def capture_history(self).
+
+Função: Busca o histórico de preços (OHLC - Open, High, Low, Close) para montar o gráfico de Candlestick do Dólar.
+
+Detalhe Técnico: Solicitamos com period: 1 (Diário) para pegar os dados de fechamento dos últimos 90 dias. A resposta desta API vem com chaves nominais (open, max, min, close), diferente da QuotesRequest que usa IDs numéricos/hexadecimais.

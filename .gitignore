@@ -1,17 +1,15 @@
-# Ambientes Virtuais
+# Ambientes e Cache
 venv/
-env/
+__pycache__/
+*.pyc
+.DS_Store
 
-# Variáveis de Ambiente (SENHAS - CRÍTICO)
+# Segurança e Configuração Local
 .env
 
-# Bancos de Dados (Não subimos binários grandes ou dados locais)
+# Bancos de Dados (Não subir!)
 *.duckdb
 *.db
 
-# Cache do Python
-__pycache__/
-*.pyc
-
-# Logs e arquivos de sistema
-.DS_Store
+# Arquivos Temporários de Runtime
+active_chart.json

@@ -1,13 +1,13 @@
 {
     "B3": [
         { "name": "Dolar", "root": "DOL", "source": 57, "months": "FGHJKMNQUVXZ", "chart": true },
-        { "name": "Milho", "root": "CCM", "source": 57, "months": "FHKNUX" },
-        { "name": "Boi", "root": "BGI", "source": 57, "months": "FVXZ" }
+        { "name": "Milho", "root": "CCM", "source": 57, "months": "FGHJKMNQUVXZ", "chart": true },
+        { "name": "Boi", "root": "BGI", "source": 57, "months": "FGHJKMNQUVXZ", "chart": true }
     ],
     "CBOT": [
-        { "name": "Soja", "root": "ZS", "source": 30, "months": "HKNX" },
-        { "name": "Milho", "root": "ZC", "source": 30, "months": "HKUZ" },
-        { "name": "Farelo", "root": "ZM", "source": 30, "months": "HKNVZ" },
-        { "name": "Oleo", "root": "ZL", "source": 30, "months": "HKNVZ" }
+        { "name": "Soja", "root": "ZS", "source": 30, "months": "FGHJKMNQUVXZ", "chart": true },
+        { "name": "Milho", "root": "ZC", "source": 30, "months": "FGHJKMNQUVXZ", "chart": true },
+        { "name": "Farelo", "root": "ZM", "source": 30, "months": "FGHJKMNQUVXZ", "chart": true },
+        { "name": "Oleo", "root": "ZL", "source": 30, "months": "FGHJKMNQUVXZ", "chart": true }
     ]
 }
