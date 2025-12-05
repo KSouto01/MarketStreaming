@@ -8,12 +8,26 @@ from dash import dcc, html, Input, Output, State, no_update, ctx
 from datetime import datetime
 import json
 import os 
+import time
+import traceback
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_REALTIME = os.path.join(BASE_DIR, 'cma_realtime.duckdb')
 DB_HISTORY = os.path.join(BASE_DIR, 'cma_history.duckdb')
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 CHART_FILE = os.path.join(BASE_DIR, 'active_chart.json')
+
+# --- LEITURA BLINDADA ---
+def safe_read_db(db_path, query):
+    for attempt in range(10):
+        try:
+            conn = duckdb.connect(db_path, read_only=True)
+            df = conn.execute(query).fetchdf()
+            conn.close()
+            return df
+        except Exception:
+            time.sleep(0.05)
+    return pd.DataFrame()
 
 def load_config():
     try:
@@ -29,6 +43,7 @@ def save_active_chart(symbol, source_id):
             with open(CHART_FILE, 'w') as f: json.dump({"symbol": symbol, "sourceId": str(source_id)}, f)
     except: pass
 
+# --- FORMATAÇÃO ---
 def format_currency_vec(series, decimals=2):
     s_num = pd.to_numeric(series, errors='coerce').fillna(0)
     return s_num.apply(lambda x: '-' if x == 0 else f"{x:,.{decimals}f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
@@ -37,6 +52,7 @@ def format_pct_vec(series):
     s_num = pd.to_numeric(series, errors='coerce').fillna(0)
     return s_num.apply(lambda x: '-' if x == 0 else f"{'+' if x > 0 else ''}{x:,.2f}%".replace('.', ','))
 
+# --- ESTILOS ---
 style_bold = {'fontSize': '15px', 'fontWeight': 'bold', 'color': '#fff', 'display': 'flex', 'alignItems': 'center'}
 style_last = {'fontSize': '15px', 'fontWeight': 'bold', 'color': '#4db6ac', 'display': 'flex', 'alignItems': 'center'}
 style_base = {'fontSize': '15px', 'fontFamily': 'Roboto Mono', 'display': 'flex', 'alignItems': 'center'}
@@ -48,6 +64,7 @@ style_change = {
     ]
 }
 
+# --- COLUNAS ---
 cols_def = [
     {"field": "symbol", "headerName": "ATIVO", "minWidth": 90, "pinned": "left", "cellStyle": style_bold},
     {"field": "Last_fmt", "headerName": "ÚLTIMO", "cellStyle": style_last},
@@ -58,13 +75,19 @@ cols_def = [
     {"field": "Change_raw", "hide": True}
 ]
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG, "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG, "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"], suppress_callback_exceptions=True)
 app.title = "Fazendão Streaming"
 
 def create_card(title, grid_id):
     return dbc.Card([
         dbc.CardHeader(title, className="fw-bold text-white border-bottom border-secondary py-1 ps-2", style={"backgroundColor": "black", "fontSize": "0.85rem", "letterSpacing": "1px"}),
-        dbc.CardBody(dag.AgGrid(id=grid_id, className="ag-theme-balham-dark", dashGridOptions={"defaultColDef": {"resizable": True, "sortable": True, "flex": 1, "minWidth": 60}, "columnDefs": cols_def, "headerHeight": 32, "rowHeight": 32, "suppressMovableColumns": True}, columnSize="sizeToFit", style={"height": "100%", "width": "100%"}, rowData=[]), className="p-0 d-flex flex-column flex-grow-1")
+        dbc.CardBody(dag.AgGrid(
+            id=grid_id, className="ag-theme-balham-dark", 
+            getRowId="params.data.symbol",
+            dashGridOptions={"defaultColDef": {"resizable": True, "sortable": True, "flex": 1, "minWidth": 60}, 
+                             "columnDefs": cols_def, "headerHeight": 32, "rowHeight": 32, "suppressMovableColumns": True},
+            columnSize="sizeToFit", style={"height": "100%", "width": "100%"}, rowData=[]
+        ), className="p-0 d-flex flex-column flex-grow-1")
     ], className="h-100 shadow-sm")
 
 filter_modal = dbc.Modal([
@@ -78,7 +101,10 @@ filter_modal = dbc.Modal([
             dbc.Col([dbc.Label("Ativo (Símbolo)"), dcc.Dropdown(id="filter-symbol", options=[], placeholder="Selecione o contrato...", className="text-dark", style={'width': '100%'})], width=12),
         ])
     ]),
-    dbc.ModalFooter([html.Div(id="filter-error-msg", className="text-danger me-auto small"), dbc.Button("Aplicar Filtro", id="apply-filter", color="primary", n_clicks=0)])
+    dbc.ModalFooter([
+        html.Div(id="filter-error-msg", className="text-danger me-auto small"),
+        dbc.Button("Aplicar Filtro", id="apply-filter", color="primary", n_clicks=0)
+    ])
 ], id="modal-filter", is_open=False, centered=True)
 
 app.layout = dbc.Container([
@@ -105,11 +131,16 @@ app.layout = dbc.Container([
 )
 def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, current_filter_data):
     trigger = ctx.triggered_id
-    # CORREÇÃO: Todos os returns agora têm 15 elementos
-    if trigger == 'open-filter': return [no_update]*12 + [True, "", no_update]
+    # Lista segura de 14 items
+    no_updates = [no_update]*14 
     
+    # 1. ABRIR FILTRO
+    if trigger == 'open-filter': 
+        return [no_update]*11 + [True, "", no_update]
+    
+    # 2. APLICAR FILTRO
     if trigger == 'apply-filter':
-        if not all([sel_exchange, sel_prod, sel_symbol]): return [no_update]*12 + [True, "Preencha todos os campos!", no_update]
+        if not all([sel_exchange, sel_prod, sel_symbol]): return [no_update]*11 + [True, "Preencha todos os campos!", no_update]
         current_filter_data = {'symbol': sel_symbol, 'product': sel_prod}
         config = load_config()
         src_id = "57"
@@ -120,16 +151,13 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
         is_open = False
 
     try:
-        conn = duckdb.connect(DB_REALTIME, read_only=True)
-        try: df = conn.execute("SELECT * FROM market_snapshot ORDER BY Maturity ASC, symbol ASC").fetchdf()
-        except: df = pd.DataFrame()
-        conn.close()
+        # 3. LEITURA DOS DADOS (BLINDADA)
+        df = safe_read_db(DB_REALTIME, "SELECT * FROM market_snapshot ORDER BY Maturity ASC, symbol ASC")
+        df_hist = safe_read_db(DB_HISTORY, "SELECT * FROM market_history ORDER BY date_ref ASC")
         
-        conn_h = duckdb.connect(DB_HISTORY, read_only=True)
-        try: df_hist = conn_h.execute("SELECT * FROM market_history ORDER BY date_ref ASC").fetchdf()
-        except: df_hist = pd.DataFrame()
-        conn_h.close()
-        
+        # LOG VISUAL PARA CONFIRMAÇÃO
+        if df.empty: print("⚠️ App: Leitura vazia (Verifique Ingestor)")
+
         if not df.empty:
             col_map = {'last':'Last','high':'High','low':'Low','open':'Open','change':'Change','pchange':'PChange','previous':'Previous','volume':'Volume','time':'Time','bid':'Bid','ask':'Ask','maturity':'Maturity','symbol':'symbol','group_name':'group_name','product_name':'product_name'}
             df.columns = [x.lower() for x in df.columns]
@@ -137,10 +165,17 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
             df = df.fillna(0)
             df['product_name'] = df['product_name'].astype(str).str.strip()
             df['group_name'] = df['group_name'].astype(str).str.strip()
+            df['Maturity'] = df['Maturity'].astype(str)
+            
+            # FILTRO: Removido para garantir visualização mesmo zerado
+            # df = df[df['Last'] > 0]
+
             cols_num = ['Last', 'High', 'Low', 'Open', 'Change', 'PChange']
             for col in cols_num: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
             mask_dolar = df['product_name'].str.lower() == 'dolar'
             if mask_dolar.any(): df.loc[mask_dolar, ['Last', 'High', 'Low', 'Change']] /= 1000.0
+            
             for c in ['Last', 'High', 'Low', 'Change']: df[f"{c}_fmt"] = format_currency_vec(df[c], 2)
             if mask_dolar.any():
                 for c in ['Last', 'High', 'Low', 'Change']: df.loc[mask_dolar, f"{c}_fmt"] = format_currency_vec(df.loc[mask_dolar, c], 4)
@@ -148,8 +183,9 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
             df['Change_raw'] = df['Change']
 
         def d(g, p): 
-            filtered = df[(df['group_name'].str.lower() == g.lower()) & (df['product_name'].str.lower() == p.lower())]
-            return filtered.to_dict('records') if not filtered.empty else []
+            if df.empty: return []
+            filtered = df[(df['group_name'].str.strip().str.lower() == g.lower()) & (df['product_name'].str.strip().str.lower() == p.lower())]
+            return filtered.to_dict('records')
 
         fig = go.Figure()
         prods, symbols = [], []
@@ -160,11 +196,12 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
             if sel_prod: symbols = sorted(df[df['product_name'] == sel_prod]['symbol'].unique())
 
             target_symbol = current_filter_data.get('symbol')
-            target_prod_name = current_filter_data.get('product')
+            target_prod_name = current_filter_data.get('product') or "Dólar"
             
+            # Auto-Init
             if not target_symbol:
                 dol_avail = df[df['product_name'].str.lower() == 'dolar']
-                if not dol_avail.empty:
+                if not dol_avail.empty: 
                     target_symbol = dol_avail.iloc[0]['symbol']
                     save_active_chart(target_symbol, "57")
 
@@ -172,8 +209,12 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
                 hist_data = df_hist[df_hist['symbol'] == target_symbol].copy()
                 if not hist_data.empty:
                     hist_data.columns = [x.lower() for x in hist_data.columns]
+                    col_h_map = {'max': 'high', 'min': 'low'}
+                    hist_data = hist_data.rename(columns=col_h_map)
+                    
                     if 'dol' in target_symbol.lower():
-                        for c in ['open', 'high', 'low', 'close']: hist_data[c] = pd.to_numeric(hist_data[c], errors='coerce').fillna(0) / 1000.0
+                        for c in ['open', 'high', 'low', 'close']: 
+                             if c in hist_data.columns: hist_data[c] = pd.to_numeric(hist_data[c], errors='coerce').fillna(0) / 1000.0
                     
                     last_c = hist_data.iloc[-1]['close']
                     prev_c = hist_data.iloc[-2]['close'] if len(hist_data) > 1 else last_c
@@ -196,13 +237,10 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
                 d('B3', 'Dolar'), d('B3', 'Milho'), d('B3', 'Boi'),
                 fig, datetime.now().strftime('%H:%M:%S'), prods, symbols, is_open, "", current_filter_data)
     except Exception as e:
-        print(f"Erro: {e}")
-        return [no_update]*14 + [no_update]
+        print(f"❌ Erro App: {e}")
+        return [no_update]*14
 
-@app.callback(Output("modal-filter", "is_open"), [Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")], [State("modal-filter", "is_open")])
-def toggle_modal(n1, n2, is_open):
-    if n1 or n2: return not is_open
-    return is_open
+# --- REMOVIDO: Callback 'toggle_modal' foi deletado pois já está integrado acima ---
 
 if __name__ == "__main__":
     app.run(debug=False, port=8050, host='0.0.0.0')

@@ -24,16 +24,11 @@ class RealtimeIngestor:
         self.base_url = host + "/execute"
         self.user = os.getenv("CMA_USER")
         self.password = os.getenv("CMA_PASS")
-        
         self.session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-        self.session.mount('https://', adapter)
-        
+        self.session.mount('https://', requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20))
         self.session_id = None
         self.msg_id = 0
         self.config = self._load_config()
-        
-        # Inicialização Robusta
         print(f"📂 Banco Realtime: {DB_REALTIME}")
         self._init_db()
 
@@ -43,30 +38,23 @@ class RealtimeIngestor:
         except: return {}
 
     def _init_db(self):
-        """Cria a tabela e garante que ela existe."""
         try:
             with duckdb.connect(DB_REALTIME) as conn:
-                # Removemos WAL no init para evitar travamentos de arquivo no Windows
                 conn.execute("CREATE TABLE IF NOT EXISTS market_snapshot (timestamp TIMESTAMP, group_name VARCHAR, product_name VARCHAR, symbol VARCHAR, description VARCHAR, Last DOUBLE, High DOUBLE, Low DOUBLE, Open DOUBLE, Change DOUBLE, PChange DOUBLE, Previous DOUBLE, Volume DOUBLE, Time VARCHAR, Bid DOUBLE, Ask DOUBLE, Maturity DATE)")
-            print("✅ Tabela 'market_snapshot' verificada.")
-        except Exception as e:
-            print(f"❌ Erro Crítico criando DB: {e}")
+        except Exception as e: print(f"⚠️ Erro Init DB: {e}")
 
     def _fast_float(self, val):
         if val is None or val == "": return 0.0
-        try:
-            return float(val)
+        try: return float(val)
         except:
-            try:
-                s = str(val).replace('+', '').replace(',', '.').strip()
-                return float(s) if s else 0.0
+            try: return float(str(val).replace('+', '').replace(',', '.').strip())
             except: return 0.0
 
     def _post(self, name, payload):
         data = {"id": self.msg_id, "name": name, "sessionId": self.session_id or "", **payload}
         self.msg_id += 1
         try:
-            resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(data)}, timeout=5)
+            resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(data)}, timeout=4)
             return resp.json() if resp.status_code == 200 else None
         except: return None
 
@@ -76,9 +64,8 @@ class RealtimeIngestor:
         resp = self._post("LoginRequest", {"user": self.user, "pass": self.password, "type": "s", "service": "m", "transport": "Polling", "version": 1, "sync": True, "oms": {"ip": "0.0.0.0", "channel": "API", "language": "PT"}})
         if resp and resp.get("success"):
             self.session_id = resp.get("sessionId")
-            print("✅ [Quotes] Conectado!")
+            print("✅ [Quotes] Conectado! Iniciando Streaming...")
             return True
-        print(f"⛔ Falha Login: {resp}")
         return False
 
     def generate_symbol_list(self):
@@ -97,20 +84,17 @@ class RealtimeIngestor:
         return candidates
 
     def save_to_db(self, rows):
-        """Salva no banco com Auto-Repair se a tabela sumir."""
-        try:
-            con = duckdb.connect(DB_REALTIME)
-            con.execute("DELETE FROM market_snapshot")
-            con.executemany("INSERT INTO market_snapshot VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-            con.close()
-            return True
-        except duckdb.CatalogException:
-            print("⚠️ Tabela sumiu! Recriando...")
-            self._init_db() # Recria
-            return False # Tenta na próxima
-        except Exception as e:
-            print(f"⚠️ Erro DB: {e}")
-            return False
+        for _ in range(3):
+            try:
+                con = duckdb.connect(DB_REALTIME)
+                con.execute("DELETE FROM market_snapshot")
+                if rows:
+                    con.executemany("INSERT INTO market_snapshot VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                con.close()
+                return True
+            except duckdb.CatalogException: self._init_db()
+            except: time.sleep(0.1)
+        return False
 
     def run(self):
         while True:
@@ -135,39 +119,36 @@ class RealtimeIngestor:
                             if not meta: continue
                             
                             vals = {}
-                            arr_vals = q.get('arrValues', [])
-                            if not arr_vals: continue
-                            
-                            for item in arr_vals:
+                            for item in q.get('arrValues', []):
                                 for k, v in item.items():
                                     if str(k).upper() in FIELDS_MAP: vals[FIELDS_MAP[str(k).upper()]] = v
                             
                             last = self._fast_float(vals.get('Last'))
                             prev = self._fast_float(vals.get('Previous'))
+                            
+                            # Fallback se Last for 0 mas tiver Previous
                             if last == 0 and prev > 0: last = prev 
                             
-                            valid_rows.append((
-                                now, meta['group'], meta['product'], sym, f"{meta['product']} {sym}",
-                                last, self._fast_float(vals.get('High')), self._fast_float(vals.get('Low')),
-                                self._fast_float(vals.get('Open')), self._fast_float(vals.get('Change')),
-                                self._fast_float(vals.get('PChange')), prev,
-                                self._fast_float(vals.get('Volume')), str(vals.get('Time', '-')),
-                                self._fast_float(vals.get('Bid')), self._fast_float(vals.get('Ask')), 
-                                meta['maturity_est']
-                            ))
+                            # --- FILTRO NA FONTE (O SEGREDO) ---
+                            # Só salva se tiver preço > 0. Ativos zerados são descartados aqui.
+                            if last > 0:
+                                valid_rows.append((
+                                    now, meta['group'], meta['product'], sym, f"{meta['product']} {sym}",
+                                    last, self._fast_float(vals.get('High')), self._fast_float(vals.get('Low')),
+                                    self._fast_float(vals.get('Open')), self._fast_float(vals.get('Change')),
+                                    self._fast_float(vals.get('PChange')), prev,
+                                    self._fast_float(vals.get('Volume')), str(vals.get('Time', '-')),
+                                    self._fast_float(vals.get('Bid')), self._fast_float(vals.get('Ask')), 
+                                    meta['maturity_est']
+                                ))
 
-                if valid_rows:
-                    self.save_to_db(valid_rows)
-                    print(f"\r🚀 Streaming: {len(valid_rows)} ativos | {datetime.now().strftime('%H:%M:%S.%f')[:-3]}", end="", flush=True)
+                self.save_to_db(valid_rows)
+                print(f"\r🚀 Streaming: {len(valid_rows)} ativos válidos (Last > 0) | {datetime.now().strftime('%H:%M:%S')}", end="", flush=True)
                 
-                time.sleep(0.01)
+                time.sleep(0.5)
 
-            except KeyboardInterrupt:
-                print("\n🛑 Parando...")
-                break
-            except Exception as e:
-                print(f"\n⚠️ Erro Flash: {e}")
-                time.sleep(1)
+            except KeyboardInterrupt: break
+            except: time.sleep(1)
 
 if __name__ == "__main__":
     RealtimeIngestor().run()

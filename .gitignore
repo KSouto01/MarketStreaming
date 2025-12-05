@@ -1,15 +1,6 @@
-# Ambientes e Cache
 venv/
 __pycache__/
-*.pyc
-.DS_Store
-
-# Segurança e Configuração Local
 .env
-
-# Bancos de Dados (Não subir!)
 *.duckdb
-*.db
-
-# Arquivos Temporários de Runtime
 active_chart.json
+.DS_Store
