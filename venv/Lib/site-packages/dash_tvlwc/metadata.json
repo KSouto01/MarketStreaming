@@ -1,0 +1,298 @@
+{
+  "src/lib/components/Tvlwc.react.js": {
+    "description": "Tradingview Lightweight Chart object",
+    "displayName": "Tvlwc",
+    "methods": [],
+    "props": {
+      "id": {
+        "type": {
+          "name": "string"
+        },
+        "required": false,
+        "description": "The ID of this component"
+      },
+      "chartOptions": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Object containing all chart options\nSee https://tradingview.github.io/lightweight-charts/docs/api/interfaces/ChartOptions for possible options",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "seriesData": {
+        "type": {
+          "name": "arrayOf",
+          "value": {
+            "name": "arrayOf",
+            "value": {
+              "name": "object"
+            }
+          }
+        },
+        "required": false,
+        "description": "Data for the series",
+        "defaultValue": {
+          "value": "[]",
+          "computed": false
+        }
+      },
+      "seriesTypes": {
+        "type": {
+          "name": "arrayOf",
+          "value": {
+            "name": "enum",
+            "value": [
+              {
+                "value": "'bar'",
+                "computed": false
+              },
+              {
+                "value": "'candlestick'",
+                "computed": false
+              },
+              {
+                "value": "'area'",
+                "computed": false
+              },
+              {
+                "value": "'baseline'",
+                "computed": false
+              },
+              {
+                "value": "'line'",
+                "computed": false
+              },
+              {
+                "value": "'histogram'",
+                "computed": false
+              }
+            ]
+          }
+        },
+        "required": false,
+        "description": "Type of the series",
+        "defaultValue": {
+          "value": "[]",
+          "computed": false
+        }
+      },
+      "seriesOptions": {
+        "type": {
+          "name": "arrayOf",
+          "value": {
+            "name": "object"
+          }
+        },
+        "required": false,
+        "description": "Options for the series",
+        "defaultValue": {
+          "value": "[]",
+          "computed": false
+        }
+      },
+      "seriesMarkers": {
+        "type": {
+          "name": "arrayOf",
+          "value": {
+            "name": "arrayOf",
+            "value": {
+              "name": "object"
+            }
+          }
+        },
+        "required": false,
+        "description": "Additional markers for the series",
+        "defaultValue": {
+          "value": "[]",
+          "computed": false
+        }
+      },
+      "seriesPriceLines": {
+        "type": {
+          "name": "arrayOf",
+          "value": {
+            "name": "arrayOf",
+            "value": {
+              "name": "object"
+            }
+          }
+        },
+        "required": false,
+        "description": "Additional price lines for the series",
+        "defaultValue": {
+          "value": "[]",
+          "computed": false
+        }
+      },
+      "crosshair": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Crosshair coordinates; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "click": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Last-clicked on chart coordinates; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "fullChartOptions": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Full chart options including defaults; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "fullPriceScaleOptions": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Full chart price scale options including defaults; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "priceScaleWidth": {
+        "type": {
+          "name": "number"
+        },
+        "required": false,
+        "description": "Width of price scale; read-only",
+        "defaultValue": {
+          "value": "null",
+          "computed": false
+        }
+      },
+      "fullSeriesOptions": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Full series options including defaults; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "timeRangeVisibleRange": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Visible time range (dates); read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "timeRangeVisibleLogicalRange": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Visible logical range (bar numbers); read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "timeScaleWidth": {
+        "type": {
+          "name": "number"
+        },
+        "required": false,
+        "description": "Width of time scale; read-only",
+        "defaultValue": {
+          "value": "null",
+          "computed": false
+        }
+      },
+      "timeScaleHeight": {
+        "type": {
+          "name": "number"
+        },
+        "required": false,
+        "description": "Height of time scale; read-only",
+        "defaultValue": {
+          "value": "null",
+          "computed": false
+        }
+      },
+      "fullTimeScaleOptions": {
+        "type": {
+          "name": "object"
+        },
+        "required": false,
+        "description": "Full time scale options including defaults; read-only",
+        "defaultValue": {
+          "value": "{}",
+          "computed": false
+        }
+      },
+      "width": {
+        "type": {
+          "name": "union",
+          "value": [
+            {
+              "name": "string"
+            },
+            {
+              "name": "number"
+            }
+          ]
+        },
+        "required": false,
+        "description": "Sets width of the parent div of the chart",
+        "defaultValue": {
+          "value": "600",
+          "computed": false
+        }
+      },
+      "height": {
+        "type": {
+          "name": "union",
+          "value": [
+            {
+              "name": "string"
+            },
+            {
+              "name": "number"
+            }
+          ]
+        },
+        "required": false,
+        "description": "Sets height of the parent div of the chart",
+        "defaultValue": {
+          "value": "400",
+          "computed": false
+        }
+      },
+      "setProps": {
+        "type": {
+          "name": "func"
+        },
+        "required": false,
+        "description": "Set props"
+      }
+    }
+  }
+}

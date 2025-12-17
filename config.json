@@ -1,0 +1,16 @@
+{
+    "CBOT": [
+        {"name": "Soja", "root": "ZS", "source": 30, "months": "FGHJKMNQUVXZ"},
+        {"name": "Milho", "root": "ZC", "source": 30, "months": "HKNUZ"},
+        {"name": "Farelo", "root": "ZM", "source": 30, "months": "FGHJKMNQUVXZ"},
+        {"name": "Oleo", "root": "ZL", "source": 30, "months": "FGHJKMNQUVXZ"}
+    ],
+    "B3": [
+        {"name": "Dolar", "root": "DOL", "source": 57, "months": "FGHJKMNQUVXZ"},
+        {"name": "Boi", "root": "BGI", "source": 57, "months": "FGHJKMNQUVXZ"},
+        {"name": "Milho", "root": "CCM", "source": 57, "months": "FHKNUX"}
+    ],
+    "ECONOMIA": [
+        {"name": "Dolar Comercial", "root": "DOL COM", "source": 200, "months": ""}
+    ]
+}

@@ -1,0 +1,17 @@
+/* style.css - Sobrescreve a animação de flash do AgGrid para CINZA CLARO */
+.ag-theme-balham-dark .ag-cell-data-changed {
+    background-color: #cccccc !important;
+    color: #000 !important;
+}
+
+.ag-theme-balham-dark .ag-cell-data-changed-animation {
+    background-color: transparent;
+    transition: background-color 1s;
+}
+
+/* Garante que o fundo do modal seja escuro */
+.modal-content {
+    background-color: #222;
+    color: white;
+    border: 1px solid #444;
+}
