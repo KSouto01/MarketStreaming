@@ -45,7 +45,7 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f: return json.load(f)
     except: return {}
 
-# --- LÓGICA DE FONTE (CORRIGIDO) ---
+# --- LÓGICA DE FONTE ---
 def get_source_id_for_product(product_name):
     config = load_config()
     for group, items in config.items():
@@ -61,7 +61,6 @@ def save_active_chart(symbol, product_name):
         if os.path.exists(CHART_FILE):
             with open(CHART_FILE, 'r') as f: current = json.load(f)
         
-        # Só salva se mudar algo
         if current.get('symbol') != symbol or current.get('sourceId') != source_id:
             with open(CHART_FILE, 'w') as f: 
                 json.dump({"symbol": symbol, "sourceId": source_id}, f)
@@ -132,7 +131,22 @@ filter_modal = dbc.Modal([
 ], id="modal-filter", is_open=False, centered=True)
 
 app.layout = dbc.Container([
-    dbc.Row([dbc.Col(dbc.Card([dbc.CardBody([html.Div([html.H4("PAINEL DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.2rem', 'letterSpacing': '1px'}), html.Span("Equipe TI | Dev Klaus Maya Souto", className="ms-3", style={'color': '#ccc', 'fontSize': '0.7rem'})], style={'display': 'flex', 'alignItems': 'baseline'}), html.Div([html.Span("CONECTADO", className="fw-bold me-3", style={'color': '#fff', 'fontSize': '0.8rem'}), html.Span(id="last-update-time", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})], className="d-flex align-items-center")], className="d-flex align-items-center justify-content-between p-1")], style={'backgroundColor': '#000', 'height': '50px', 'borderBottom': '1px solid #333'}), width=12)], className="mb-1"),
+    dbc.Row([dbc.Col(dbc.Card([dbc.CardBody([
+        html.Div([
+            html.H4("PAINEL DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.2rem', 'letterSpacing': '1px'}),
+            html.Div([
+                # LINKEDIN DO DEV COM FONTE MAIOR
+                html.A("Dev: Klaus Maya Souto", href="https://www.linkedin.com/in/klaus-maya-souto-37215a163/", target="_blank", className="ms-3", style={'color': '#ccc', 'fontSize': '0.9rem', 'textDecoration': 'none', 'fontWeight': 'bold'}),
+                html.Span(" | Equipe T.I Fazendão", style={'color': '#ccc', 'fontSize': '0.9rem'})
+            ])
+        ], style={'display': 'flex', 'alignItems': 'baseline'}), 
+        html.Div([
+            # STATUS "Streaming"
+            html.Span("Streaming", className="fw-bold me-3", style={'color': '#fff', 'fontSize': '0.8rem', 'textTransform': 'uppercase', 'letterSpacing': '1px'}),
+            html.Span(id="last-update-time", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})
+        ], className="d-flex align-items-center")
+    ], className="d-flex align-items-center justify-content-between p-1")], style={'backgroundColor': '#000', 'height': '50px', 'borderBottom': '1px solid #333'}), width=12)], className="mb-1"),
+    
     html.Div([
         dbc.Row([
             dbc.Col([
@@ -269,10 +283,13 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
             else: fig.update_layout(template="plotly_dark", title="Aguardando dados...", paper_bgcolor='rgba(0,0,0,0)')
         else: fig.update_layout(template="plotly_dark", title="Iniciando...", paper_bgcolor='rgba(0,0,0,0)')
 
+        # UPDATE DO RELÓGIO COM DATA
+        current_time_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
         return (d('CBOT', 'Soja'), d('CBOT', 'Milho'), d('CBOT', 'Farelo'), d('CBOT', 'Oleo'),
                 d('B3', 'Dolar'), d('B3', 'Milho'), d('B3', 'Boi'),
                 d('ECONOMIA', 'Dolar Comercial'),
-                fig, datetime.now().strftime('%H:%M:%S'), prods, symbols, is_open, "", current_filter_data)
+                fig, current_time_str, prods, symbols, is_open, "", current_filter_data)
     except Exception as e: return [no_update]*15
 
 if __name__ == "__main__":
