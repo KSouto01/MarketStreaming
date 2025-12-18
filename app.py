@@ -45,14 +45,13 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f: return json.load(f)
     except: return {}
 
-# --- LÓGICA DE FONTE ---
 def get_source_id_for_product(product_name):
     config = load_config()
     for group, items in config.items():
         for item in items:
             if item.get('name') == product_name:
                 return str(item.get('source', '57'))
-    return "57" # Default
+    return "57"
 
 def save_active_chart(symbol, product_name):
     try:
@@ -135,15 +134,14 @@ app.layout = dbc.Container([
         html.Div([
             html.H4("PAINEL DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.2rem', 'letterSpacing': '1px'}),
             html.Div([
-                # LINKEDIN DO DEV COM FONTE MAIOR
                 html.A("Dev: Klaus Maya Souto", href="https://www.linkedin.com/in/klaus-maya-souto-37215a163/", target="_blank", className="ms-3", style={'color': '#ccc', 'fontSize': '0.9rem', 'textDecoration': 'none', 'fontWeight': 'bold'}),
                 html.Span(" | Equipe T.I Fazendão", style={'color': '#ccc', 'fontSize': '0.9rem'})
             ])
         ], style={'display': 'flex', 'alignItems': 'baseline'}), 
         html.Div([
-            # STATUS "Streaming"
             html.Span("Streaming", className="fw-bold me-3", style={'color': '#fff', 'fontSize': '0.8rem', 'textTransform': 'uppercase', 'letterSpacing': '1px'}),
-            html.Span(id="last-update-time", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})
+            # MUDANÇA DE ID AQUI PARA QUEBRAR CACHE ANTIGO
+            html.Span(id="server-clock", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})
         ], className="d-flex align-items-center")
     ], className="d-flex align-items-center justify-content-between p-1")], style={'backgroundColor': '#000', 'height': '50px', 'borderBottom': '1px solid #333'}), width=12)], className="mb-1"),
     
@@ -179,18 +177,22 @@ app.layout = dbc.Container([
             ], width=4, className="d-flex flex-column h-100 ps-1"),
         ], style={"height": "100%", "width": "100%", "margin": "0"}),
     ], style={"height": "calc(98vh - 60px)", "display": "flex", "width": "100%"}),
-    filter_modal, dcc.Interval(id='interval-updater', interval=1000, n_intervals=0),
+    filter_modal, 
+    # MUDANÇA DE ID AQUI TAMBÉM
+    dcc.Interval(id='interval-global-timer', interval=1000, n_intervals=0),
     dcc.Store(id='current-filter', data={'symbol': 'DOLF26', 'product': 'Dolar'}) 
 ], fluid=True, style={"height": "100vh", "backgroundColor": "#111", "overflow": "hidden", "padding": "5px"})
 
+# ATUALIZADO NO INPUT E OUTPUT
 @app.callback(
     [Output("grid-soja", "rowData"), Output("grid-milho", "rowData"), Output("grid-farelo", "rowData"), Output("grid-oleo", "rowData"),
      Output("grid-dolar", "rowData"), Output("grid-ccm", "rowData"), Output("grid-boi", "rowData"),
      Output("grid-spot", "rowData"), 
-     Output("chart-main", "figure"), Output("last-update-time", "children"),
+     Output("chart-main", "figure"), Output("server-clock", "children"), # ID NOVO
      Output("filter-product", "options"), Output("filter-symbol", "options"),
      Output("modal-filter", "is_open"), Output("filter-error-msg", "children"), Output("current-filter", "data")],
-    [Input("interval-updater", "n_intervals"), Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")],
+    [Input("interval-global-timer", "n_intervals"), # ID NOVO
+     Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")],
     [State("modal-filter", "is_open"), State("filter-exchange", "value"), State("filter-product", "value"), State("filter-symbol", "value"), State("current-filter", "data")]
 )
 def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, current_filter_data):
@@ -199,16 +201,18 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
     
     if trigger == 'apply-filter':
         if not all([sel_exchange, sel_prod, sel_symbol]): return [no_update]*12 + [True, "Preencha todos os campos!", no_update]
-        
         save_active_chart(sel_symbol, sel_prod)
         current_filter_data = {'symbol': sel_symbol, 'product': sel_prod}
         is_open = False
 
     try:
+        # QUERY OTIMIZADA
         df = safe_read_db(DB_REALTIME, "SELECT * FROM market_snapshot ORDER BY Maturity ASC, symbol ASC")
         df_hist = safe_read_db(DB_HISTORY, "SELECT * FROM market_history ORDER BY date_ref ASC")
         
-        if df.empty: return [no_update]*15
+        # SE O BANCO ESTIVER VAZIO OU TRAVADO, RETORNA LISTAS VAZIAS (EVITA QUEBRAR)
+        if df.empty: 
+             return ([], [], [], [], [], [], [], [], go.Figure(), datetime.now().strftime('%d/%m/%Y %H:%M:%S'), [], [], is_open, "", current_filter_data)
 
         col_map = {'last':'Last','high':'High','low':'Low','open':'Open','change':'Change','pchange':'PChange','previous':'Previous','volume':'Volume','time':'Time','bid':'Bid','ask':'Ask','maturity':'Maturity','symbol':'symbol','group_name':'group_name','product_name':'product_name'}
         df.columns = [x.lower() for x in df.columns]
@@ -283,14 +287,15 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
             else: fig.update_layout(template="plotly_dark", title="Aguardando dados...", paper_bgcolor='rgba(0,0,0,0)')
         else: fig.update_layout(template="plotly_dark", title="Iniciando...", paper_bgcolor='rgba(0,0,0,0)')
 
-        # UPDATE DO RELÓGIO COM DATA
         current_time_str = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-
         return (d('CBOT', 'Soja'), d('CBOT', 'Milho'), d('CBOT', 'Farelo'), d('CBOT', 'Oleo'),
                 d('B3', 'Dolar'), d('B3', 'Milho'), d('B3', 'Boi'),
                 d('ECONOMIA', 'Dolar Comercial'),
                 fig, current_time_str, prods, symbols, is_open, "", current_filter_data)
-    except Exception as e: return [no_update]*15
+    except Exception as e: 
+        # LOG DE ERRO SE PRECISAR
+        # print(f"Erro Callback: {e}")
+        return [no_update]*15
 
 if __name__ == "__main__":
     app.run(debug=False, port=8050, host='0.0.0.0')
