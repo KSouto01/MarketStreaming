@@ -10,12 +10,20 @@ import json
 import os 
 import time
 import shutil
+import logging
+
+# --- CONFIGURAÇÃO DE LOGS (SILENCIAR O RUÍDO) ---
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_REALTIME = os.path.join(BASE_DIR, 'cma_realtime.duckdb')
 DB_HISTORY = os.path.join(BASE_DIR, 'cma_history.duckdb')
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 CHART_FILE = os.path.join(BASE_DIR, 'active_chart.json')
+
+# --- CARIMBO DE VERSÃO DO SERVIDOR ---
+SERVER_START_TIME = str(time.time())
 
 # --- LEITURA HÍBRIDA ---
 def safe_read_db(db_path, query):
@@ -130,17 +138,22 @@ filter_modal = dbc.Modal([
 ], id="modal-filter", is_open=False, centered=True)
 
 app.layout = dbc.Container([
+    # --- AUTO-RELOAD ---
+    dcc.Store(id='client-version-store', data=SERVER_START_TIME),
+    dcc.Interval(id='version-checker', interval=60*1000, n_intervals=0),
+    dcc.Location(id='page-reloader', refresh=True),
+
     dbc.Row([dbc.Col(dbc.Card([dbc.CardBody([
         html.Div([
             html.H4("PAINEL DE MERCADO", className="mb-0 fw-bold", style={'color': '#66bb6a', 'fontSize': '1.2rem', 'letterSpacing': '1px'}),
             html.Div([
-                html.A("Dev: Klaus Maya Souto", href="https://www.linkedin.com/in/klaus-maya-souto-37215a163/", target="_blank", className="ms-3", style={'color': '#ccc', 'fontSize': '0.9rem', 'textDecoration': 'none', 'fontWeight': 'bold'}),
+                # LINK REMOVIDO, APENAS SPAN
+                html.Span("Dev: Klaus Maya Souto", className="ms-3", style={'color': '#ccc', 'fontSize': '0.9rem', 'fontWeight': 'bold'}),
                 html.Span(" | Equipe T.I Fazendão", style={'color': '#ccc', 'fontSize': '0.9rem'})
             ])
         ], style={'display': 'flex', 'alignItems': 'baseline'}), 
         html.Div([
             html.Span("Streaming", className="fw-bold me-3", style={'color': '#fff', 'fontSize': '0.8rem', 'textTransform': 'uppercase', 'letterSpacing': '1px'}),
-            # MUDANÇA DE ID AQUI PARA QUEBRAR CACHE ANTIGO
             html.Span(id="server-clock", className="fw-bold", style={'fontFamily': 'monospace', 'fontSize': '1rem', 'color': '#fff'})
         ], className="d-flex align-items-center")
     ], className="d-flex align-items-center justify-content-between p-1")], style={'backgroundColor': '#000', 'height': '50px', 'borderBottom': '1px solid #333'}), width=12)], className="mb-1"),
@@ -178,20 +191,28 @@ app.layout = dbc.Container([
         ], style={"height": "100%", "width": "100%", "margin": "0"}),
     ], style={"height": "calc(98vh - 60px)", "display": "flex", "width": "100%"}),
     filter_modal, 
-    # MUDANÇA DE ID AQUI TAMBÉM
-    dcc.Interval(id='interval-global-timer', interval=1000, n_intervals=0),
+    dcc.Interval(id='interval-main', interval=1000, n_intervals=0),
     dcc.Store(id='current-filter', data={'symbol': 'DOLF26', 'product': 'Dolar'}) 
 ], fluid=True, style={"height": "100vh", "backgroundColor": "#111", "overflow": "hidden", "padding": "5px"})
 
-# ATUALIZADO NO INPUT E OUTPUT
+@app.callback(
+    Output('page-reloader', 'href'),
+    Input('version-checker', 'n_intervals'),
+    State('client-version-store', 'data')
+)
+def check_version(n, client_version):
+    if client_version != SERVER_START_TIME:
+        return "/" 
+    return no_update
+
 @app.callback(
     [Output("grid-soja", "rowData"), Output("grid-milho", "rowData"), Output("grid-farelo", "rowData"), Output("grid-oleo", "rowData"),
      Output("grid-dolar", "rowData"), Output("grid-ccm", "rowData"), Output("grid-boi", "rowData"),
      Output("grid-spot", "rowData"), 
-     Output("chart-main", "figure"), Output("server-clock", "children"), # ID NOVO
+     Output("chart-main", "figure"), Output("server-clock", "children"),
      Output("filter-product", "options"), Output("filter-symbol", "options"),
      Output("modal-filter", "is_open"), Output("filter-error-msg", "children"), Output("current-filter", "data")],
-    [Input("interval-global-timer", "n_intervals"), # ID NOVO
+    [Input("interval-main", "n_intervals"), 
      Input("open-filter", "n_clicks"), Input("apply-filter", "n_clicks")],
     [State("modal-filter", "is_open"), State("filter-exchange", "value"), State("filter-product", "value"), State("filter-symbol", "value"), State("current-filter", "data")]
 )
@@ -206,11 +227,9 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
         is_open = False
 
     try:
-        # QUERY OTIMIZADA
         df = safe_read_db(DB_REALTIME, "SELECT * FROM market_snapshot ORDER BY Maturity ASC, symbol ASC")
         df_hist = safe_read_db(DB_HISTORY, "SELECT * FROM market_history ORDER BY date_ref ASC")
         
-        # SE O BANCO ESTIVER VAZIO OU TRAVADO, RETORNA LISTAS VAZIAS (EVITA QUEBRAR)
         if df.empty: 
              return ([], [], [], [], [], [], [], [], go.Figure(), datetime.now().strftime('%d/%m/%Y %H:%M:%S'), [], [], is_open, "", current_filter_data)
 
@@ -292,10 +311,7 @@ def update_all(n, n_open, n_apply, is_open, sel_exchange, sel_prod, sel_symbol, 
                 d('B3', 'Dolar'), d('B3', 'Milho'), d('B3', 'Boi'),
                 d('ECONOMIA', 'Dolar Comercial'),
                 fig, current_time_str, prods, symbols, is_open, "", current_filter_data)
-    except Exception as e: 
-        # LOG DE ERRO SE PRECISAR
-        # print(f"Erro Callback: {e}")
-        return [no_update]*15
+    except Exception as e: return [no_update]*15
 
 if __name__ == "__main__":
     app.run(debug=False, port=8050, host='0.0.0.0')
