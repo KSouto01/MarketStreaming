@@ -49,38 +49,31 @@ class HistoryIngestor:
             with open(SESSION_FILE, 'w') as f: json.dump({'sessionId': new_id, 'updated_at': time.time()}, f)
         except: pass
 
-    # --- FUNÇÃO NOVA: DESTRUIÇÃO DE SESSÃO INVÁLIDA ---
     def invalidate_session(self):
-        print("🔥 [History] Sessão Inválida detectada! Apagando token...")
+        print("🔥 [History] Sessão Inválida! Apagando token...")
         self.session_id = None
         try:
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
+            if os.path.exists(SESSION_FILE): os.remove(SESSION_FILE)
         except: pass
 
     def login(self):
-        print("📚 [History] Verificando sessão...")
+        print("📚 [History] Autenticando...")
         shared_id = self.get_shared_session()
         if shared_id and shared_id != self.session_id:
-            print(f"♻️ Usando sessão compartilhada: {shared_id[:10]}...")
             self.session_id = shared_id
             return True
         
-        print("📚 [History] Autenticando...")
         self.session.cookies.clear()
         self.msg_id += 1
         payload = {"id": self.msg_id, "name": "LoginRequest", "sessionId": "", "user": self.user, "pass": self.password, "type": "s", "service": "m", "transport": "Polling", "version": 1, "sync": True, "oms": {"ip": "0.0.0.0", "channel": "API", "language": "PT"}}
         try:
             resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(payload)}, timeout=10)
-            if resp.status_code == 200:
-                rj = resp.json()
-                if rj.get("success"):
-                    self.session_id = rj.get("sessionId")
-                    self.save_shared_session(self.session_id)
-                    self.error_count = 0
-                    print(f"✅ [History] Nova Sessão: {self.session_id[:10]}...")
-                    return True
-        except Exception as e: print(f"❌ Login Erro: {e}")
+            if resp.status_code == 200 and resp.json().get("success"):
+                self.session_id = resp.json().get("sessionId")
+                self.save_shared_session(self.session_id)
+                self.error_count = 0
+                return True
+        except: pass
         return False
 
     def _post(self, name, payload):
@@ -89,15 +82,29 @@ class HistoryIngestor:
         try:
             resp = self.session.post(self.base_url, data={'JSONRequest': json.dumps(data)}, timeout=20)
             if resp.status_code == 200: return resp.json()
-            return None
-        except: return None
+        except: pass
+        return None
 
-    def get_current_dollar_target(self):
+    # --- LÓGICA MATEMÁTICA PURA: PRÓXIMO MÊS ---
+    def get_dollar_targets(self):
+        targets = []
         today = datetime.now()
-        target_date = today + relativedelta(months=1) if today.day > 1 else today
-        m_char = MONTH_CODES[target_date.month]
-        y_str = target_date.strftime('%y')
-        return {"symbol": f"DOL{m_char}{y_str}", "sourceId": "57"}
+        
+        # Estratégia: Baixar o mês atual (0) E o próximo (1)
+        # O App vai preferir o (1), mas garantimos que o dado exista.
+        for i in range(2): 
+            target_date = today + relativedelta(months=i)
+            # Se hoje é dia > 25, o mês atual já está morrendo, garante o próximo + 1
+            if today.day > 25: 
+                target_date = today + relativedelta(months=i+1)
+
+            m_char = MONTH_CODES[target_date.month]
+            y_str = target_date.strftime('%y')
+            
+            symbol = f"DOL{m_char}{y_str}"
+            targets.append({"symbol": symbol, "sourceId": "57"})
+            
+        return targets
 
     def get_requested_target(self):
         try:
@@ -120,11 +127,10 @@ class HistoryIngestor:
         return False
 
     def run(self):
-        print("🚀 [History] Ingestor Iniciado (v13.0 - Self Healing)...")
+        print("🚀 [History] Ingestor Iniciado (v16.0 - Math Logic)...")
         while True:
             if self.error_count > 10:
-                print("💀 [History] Muitos erros. Reiniciando...")
-                self.invalidate_session() # Tenta limpar antes de morrer
+                self.invalidate_session()
                 sys.exit(1)
 
             if not self.session_id:
@@ -134,11 +140,13 @@ class HistoryIngestor:
                     continue
             
             try:
-                targets = []
-                dollar = self.get_current_dollar_target()
-                targets.append(dollar)
+                # 1. Garante os Dólares (Lógica Matemática)
+                targets = self.get_dollar_targets()
+                
+                # 2. Garante o que o usuário clicou
                 requested = self.get_requested_target()
-                if requested and requested['symbol'] != dollar['symbol']: targets.append(requested)
+                if requested and not any(t['symbol'] == requested['symbol'] for t in targets):
+                    targets.append(requested)
 
                 for target in targets:
                     sym = target['symbol']
@@ -147,31 +155,26 @@ class HistoryIngestor:
                     last_update = self.processed_cache.get(sym, 0)
                     if time.time() - last_update < 60: continue
 
-                    print(f"📉 Baixando: {sym} (Source: {sid})...", end=" ")
+                    print(f"📉 Baixando: {sym}...", end=" ")
                     
-                    payload = {"type": "c", "sync": True, "symbolId": {"sourceId": sid, "symbol": sym}, "dateFrom": (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d"), "dateTo": datetime.now().strftime("%Y-%m-%d"), "period": 1}
+                    # 30 Dias de histórico
+                    payload = {"type": "c", "sync": True, "symbolId": {"sourceId": sid, "symbol": sym}, "dateFrom": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"), "dateTo": datetime.now().strftime("%Y-%m-%d"), "period": 1}
                     
                     resp = self._post("DailyGraphRequest", payload)
                     
-                    # --- LÓGICA DE DETECÇÃO DE SESSÃO MORTA ---
                     if resp and not resp.get("success"):
-                        err_status = resp.get("status", 0)
-                        # Status 10004 = Sessão Inválida/Expirada
-                        if err_status == 10004 or "session" in str(resp).lower():
-                            print(f"\n❌ SESSÃO MORREU ({err_status}). Resetando...")
+                        if resp.get("status") == 10004:
                             self.invalidate_session()
-                            break # Sai do loop de targets para relogar imediatamente
+                            break 
                         else:
-                            print(f"\n⚠️ API Recusou {sym}: {resp.get('textual')}")
+                            print(f"⚠️ N/A ({resp.get('textual')})")
                             self.processed_cache[sym] = time.time()
                             continue
 
                     if not resp:
-                        print("❌ Falha Rede")
                         self.error_count += 1
                         continue
 
-                    self.error_count = 0
                     rows = []
                     bars = resp.get('graphicalBars') or resp.get('bars')
                     if bars:
@@ -180,20 +183,13 @@ class HistoryIngestor:
                                 rows.append((sym, str(b.get('date')), float(b.get('open') or 0), float(b.get('max') or 0), float(b.get('min') or 0), float(b.get('close') or 0), float(b.get('volume') or 0)))
                             except: continue
                     
-                    if rows:
-                        if self.save_to_db(rows, sym):
-                            print(f"✅ {len(rows)} candles.")
-                            self.processed_cache[sym] = time.time()
-                    else:
-                        print(f"⚠️ Sem dados.")
+                    if self.save_to_db(rows, sym):
+                        print(f"✅")
                         self.processed_cache[sym] = time.time()
-                time.sleep(1)
-            
+                
+                time.sleep(2)
             except Exception as e:
-                print(f"❌ Erro Geral: {e}")
                 self.error_count += 1
-                if self.error_count > 2:
-                    self.invalidate_session() # Força reset se errar muito
                 time.sleep(5)
 
 if __name__ == "__main__":
