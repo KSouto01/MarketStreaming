@@ -1,7 +1,8 @@
+
 .env
-session_token.json
-active_chart.json
+__pycache__/
 *.duckdb
 *.duckdb.wal
-*_shadow.duckdb
-__pycache__/
+*.log
+session_token.json
+active_chart.json

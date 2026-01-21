@@ -50,7 +50,7 @@ class HistoryIngestor:
         except: pass
 
     def invalidate_session(self):
-        print("🔥 [History] Sessão Inválida! Apagando token...")
+        print("🔥 [History] Sessão Inválida! Resetando...")
         self.session_id = None
         try:
             if os.path.exists(SESSION_FILE): os.remove(SESSION_FILE)
@@ -85,35 +85,25 @@ class HistoryIngestor:
         except: pass
         return None
 
-    # --- LÓGICA MATEMÁTICA PURA: PRÓXIMO MÊS ---
+    def get_user_request(self):
+        for _ in range(3): 
+            try:
+                if os.path.exists(CHART_FILE):
+                    with open(CHART_FILE, 'r') as f: return json.load(f)
+            except: time.sleep(0.1)
+        return None
+
     def get_dollar_targets(self):
         targets = []
         today = datetime.now()
-        
-        # Estratégia: Baixar o mês atual (0) E o próximo (1)
-        # O App vai preferir o (1), mas garantimos que o dado exista.
         for i in range(2): 
             target_date = today + relativedelta(months=i)
-            # Se hoje é dia > 25, o mês atual já está morrendo, garante o próximo + 1
-            if today.day > 25: 
-                target_date = today + relativedelta(months=i+1)
-
+            if today.day > 25: target_date = today + relativedelta(months=i+1)
             m_char = MONTH_CODES[target_date.month]
             y_str = target_date.strftime('%y')
-            
-            symbol = f"DOL{m_char}{y_str}"
-            targets.append({"symbol": symbol, "sourceId": "57"})
-            
+            # 1 ANO DE DADOS PARA O DÓLAR TAMBÉM
+            targets.append({"symbol": f"DOL{m_char}{y_str}", "sourceId": "57", "days": 365, "priority": "low"})
         return targets
-
-    def get_requested_target(self):
-        try:
-            if os.path.exists(CHART_FILE):
-                with open(CHART_FILE, 'r') as f:
-                    data = json.load(f)
-                    if data.get('symbol'): return data
-        except: pass
-        return None
 
     def save_to_db(self, rows, symbol):
         for _ in range(5):
@@ -127,7 +117,7 @@ class HistoryIngestor:
         return False
 
     def run(self):
-        print("🚀 [History] Ingestor Iniciado (v16.0 - Math Logic)...")
+        print("🚀 [History] Ingestor Iniciado (v22.0 - 1 Year Standard)...")
         while True:
             if self.error_count > 10:
                 self.invalidate_session()
@@ -140,25 +130,39 @@ class HistoryIngestor:
                     continue
             
             try:
-                # 1. Garante os Dólares (Lógica Matemática)
-                targets = self.get_dollar_targets()
+                targets_map = {}
+                for d in self.get_dollar_targets():
+                    targets_map[d['symbol']] = d
+
+                user_req = self.get_user_request()
                 
-                # 2. Garante o que o usuário clicou
-                requested = self.get_requested_target()
-                if requested and not any(t['symbol'] == requested['symbol'] for t in targets):
-                    targets.append(requested)
+                if user_req and user_req.get('symbol'):
+                    req_sym = user_req.get('symbol')
+                    req_source = user_req.get('sourceId', '57')
+                    
+                    # SEMPRE 365 DIAS (1 ANO) INDEPENDENTE DO FILTRO
+                    # Isso permite ao frontend fazer zoom local sem chamar API
+                    days_needed = 365 
+                    
+                    if req_sym in targets_map:
+                        targets_map[req_sym]['days'] = days_needed
+                        targets_map[req_sym]['priority'] = "high"
+                    else:
+                        targets_map[req_sym] = {"symbol": req_sym, "sourceId": req_source, "days": days_needed, "priority": "high"}
 
-                for target in targets:
-                    sym = target['symbol']
+                for sym, target in targets_map.items():
                     sid = target.get('sourceId', '57')
+                    days = target.get('days', 365)
+                    priority = target.get('priority', 'low')
                     
-                    last_update = self.processed_cache.get(sym, 0)
-                    if time.time() - last_update < 60: continue
+                    cache_key = f"{sym}_{days}"
+                    last_update = self.processed_cache.get(cache_key, 0)
+                    ttl = 5 if priority == "high" else 60
+                    if time.time() - last_update < ttl: continue
 
-                    print(f"📉 Baixando: {sym}...", end=" ")
+                    print(f"📉 Baixando: {sym} ({days}d)...", end=" ")
                     
-                    # 30 Dias de histórico
-                    payload = {"type": "c", "sync": True, "symbolId": {"sourceId": sid, "symbol": sym}, "dateFrom": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"), "dateTo": datetime.now().strftime("%Y-%m-%d"), "period": 1}
+                    payload = {"type": "c", "sync": True, "symbolId": {"sourceId": sid, "symbol": sym}, "dateFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"), "dateTo": datetime.now().strftime("%Y-%m-%d"), "period": 1}
                     
                     resp = self._post("DailyGraphRequest", payload)
                     
@@ -167,8 +171,8 @@ class HistoryIngestor:
                             self.invalidate_session()
                             break 
                         else:
-                            print(f"⚠️ N/A ({resp.get('textual')})")
-                            self.processed_cache[sym] = time.time()
+                            print(f"⚠️ API Error")
+                            self.processed_cache[cache_key] = time.time()
                             continue
 
                     if not resp:
@@ -185,12 +189,12 @@ class HistoryIngestor:
                     
                     if self.save_to_db(rows, sym):
                         print(f"✅")
-                        self.processed_cache[sym] = time.time()
+                        self.processed_cache[cache_key] = time.time()
                 
-                time.sleep(2)
+                time.sleep(1)
             except Exception as e:
                 self.error_count += 1
-                time.sleep(5)
+                time.sleep(2)
 
 if __name__ == "__main__":
     HistoryIngestor().run()
